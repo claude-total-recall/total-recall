@@ -99,9 +99,15 @@ Use the total-recall MCP to persist knowledge across context resets. **Proactive
 
 **Tools:**
 - `memory_set` - store/update (auto-embeds for semantic search)
-- `memory_search` - find by meaning ("how does auth work")
 - `memory_get` - retrieve by exact key
+- `memory_delete` - remove a memory
 - `memory_list` - browse with pattern (`project.myapp.*`)
+- `memory_search` - find by meaning ("how does auth work")
+- `memory_fulltext` - substring/keyword search (when you know exact terms)
+- `memory_tags` - list all tags with counts
+- `memory_stats` - storage statistics
+- `memory_embed` - force (re)generate embeddings
+- `memory_history` - view previous versions of a key
 
 **On session start:** Consider `memory_search` for relevant context if resuming work or if the user's request might relate to stored knowledge.
 
