@@ -75,6 +75,9 @@ class SetResponse(BaseModel):
     created: bool
     changed: bool
     key: str
+    size_bytes: int
+    previous_value: Optional[str] = None
+    previous_size_bytes: Optional[int] = None
     warnings: list[str] = Field(default_factory=list)
 
 

@@ -68,6 +68,35 @@ class TestMemorySetHandler:
         assert result.created is False
         assert result.changed is True
 
+    async def test_returns_size_bytes(self):
+        result = await handle_memory_set({"key": "test.size", "value": "hello"})
+        assert result.size_bytes == 5
+
+    async def test_returns_previous_value_on_update(self):
+        await handle_memory_set({"key": "test.prev", "value": "original content"})
+        result = await handle_memory_set({"key": "test.prev", "value": "new"})
+        assert result.previous_value == "original content"
+        assert result.previous_size_bytes == len("original content".encode("utf-8"))
+
+    async def test_no_previous_value_on_create(self):
+        result = await handle_memory_set({"key": "test.new", "value": "fresh"})
+        assert result.previous_value is None
+        assert result.previous_size_bytes is None
+
+    async def test_truncation_warning(self):
+        # Create with large content
+        large_content = "x" * 1000
+        await handle_memory_set({"key": "test.truncate", "value": large_content})
+        # Update with much smaller content (>50% reduction)
+        result = await handle_memory_set({"key": "test.truncate", "value": "tiny"})
+        assert any("reduced by >50%" in w for w in result.warnings)
+        assert any("Accidental truncation" in w for w in result.warnings)
+
+    async def test_no_truncation_warning_above_threshold(self):
+        await handle_memory_set({"key": "test.ok", "value": "1234567890"})  # 10 bytes
+        result = await handle_memory_set({"key": "test.ok", "value": "123456"})  # 6 bytes, 60%
+        assert not any("reduced by >50%" in w for w in result.warnings)
+
 
 @pytest.mark.asyncio
 class TestMemoryGetHandler:

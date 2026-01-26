@@ -36,22 +36,28 @@ def init_database():
 
 class TestMemorySet:
     def test_create_new_memory(self):
-        created, changed, warnings = db.memory_set("test.key", "test value")
+        created, changed, prev_val, prev_size, warnings = db.memory_set("test.key", "test value")
         assert created is True
         assert changed is True
+        assert prev_val is None
+        assert prev_size is None
         assert warnings == []
 
     def test_update_existing_memory(self):
         db.memory_set("update.key", "original")
-        created, changed, warnings = db.memory_set("update.key", "updated")
+        created, changed, prev_val, prev_size, warnings = db.memory_set("update.key", "updated")
         assert created is False
         assert changed is True
+        assert prev_val == "original"
+        assert prev_size == len("original".encode("utf-8"))
 
     def test_no_change_same_value(self):
         db.memory_set("same.key", "same value")
-        created, changed, warnings = db.memory_set("same.key", "same value")
+        created, changed, prev_val, prev_size, warnings = db.memory_set("same.key", "same value")
         assert created is False
         assert changed is False
+        assert prev_val == "same value"
+        assert prev_size == len("same value".encode("utf-8"))
 
     def test_key_normalized_to_lowercase(self):
         db.memory_set("MyKey", "value")
@@ -71,7 +77,7 @@ class TestMemorySet:
 
     def test_size_warning(self):
         large_value = "x" * (101 * 1024)
-        _, _, warnings = db.memory_set("large", large_value)
+        _, _, _, _, warnings = db.memory_set("large", large_value)
         assert any("100KB" in w for w in warnings)
 
 

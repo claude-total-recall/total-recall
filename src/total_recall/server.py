@@ -317,7 +317,7 @@ async def handle_memory_set(args: dict) -> SetResponse:
         else:
             embedding_model = emb.get_model_name()
 
-    created, changed, db_warnings = db.memory_set(
+    created, changed, previous_value, previous_size_bytes, db_warnings = db.memory_set(
         key=key,
         value=value,
         content_type=content_type,
@@ -328,11 +328,24 @@ async def handle_memory_set(args: dict) -> SetResponse:
 
     warnings.extend(db_warnings)
 
+    # Calculate current size
+    size_bytes = len(value.encode("utf-8"))
+
+    # Warn if content significantly reduced (potential accidental truncation)
+    if changed and previous_size_bytes is not None and size_bytes < previous_size_bytes * 0.5:
+        warnings.append(
+            f"Content reduced by >50% (was {previous_size_bytes} bytes, now {size_bytes} bytes). "
+            "Accidental truncation?"
+        )
+
     return SetResponse(
         success=True,
         created=created,
         changed=changed,
         key=key.lower(),
+        size_bytes=size_bytes,
+        previous_value=previous_value if changed else None,
+        previous_size_bytes=previous_size_bytes,
         warnings=warnings,
     )
 

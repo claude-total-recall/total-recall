@@ -143,11 +143,11 @@ def memory_set(
     tags: Optional[list[str]] = None,
     embedding: Optional[list[float]] = None,
     embedding_model: Optional[str] = None,
-) -> tuple[bool, bool, list[str]]:
+) -> tuple[bool, bool, Optional[str], Optional[int], list[str]]:
     """Create or update a memory.
 
     Returns:
-        Tuple of (created, changed, warnings)
+        Tuple of (created, changed, previous_value, previous_size_bytes, warnings)
     """
     key = _normalize_key(key)
     tags = [_normalize_tag(t) for t in (tags or []) if t.strip()]
@@ -193,10 +193,11 @@ def memory_set(
                     (key, tag),
                 )
 
-            return True, True, warnings
+            return True, True, None, None, warnings
 
         # Update existing
         old_value = existing["value"]
+        old_size = len(old_value.encode("utf-8"))
 
         if old_value == value:
             # No change to value - only update tags if needed
@@ -223,7 +224,8 @@ def memory_set(
                     (content_type, key),
                 )
 
-            return False, False, warnings
+            # No change - return previous value info but changed=False
+            return False, False, old_value, old_size, warnings
 
         # Value changed - record history if enabled
         if history_enabled():
@@ -278,7 +280,7 @@ def memory_set(
                 (key, tag),
             )
 
-        return False, True, warnings
+        return False, True, old_value, old_size, warnings
 
 
 def memory_get(key: str) -> tuple[Optional[MemoryRecord], list[str]]:
