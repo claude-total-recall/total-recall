@@ -75,6 +75,43 @@ project.myapp.architecture
 reference.api_endpoints
 ```
 
+## Effective Use with Claude
+
+To get the most out of Total Recall, add instructions to your `CLAUDE.md` file. Here's a recommended starting point:
+
+```markdown
+## Total Recall - Persistent Memory
+
+Use the total-recall MCP to persist knowledge across context resets. **Proactively save** things worth remembering.
+
+**When to save:**
+- User states a preference or convention
+- Architectural decisions are made
+- Non-obvious codebase discoveries (gotchas, patterns, entry points)
+- Multi-session task state and progress
+- Anything the user might ask about later or need to reference
+
+**Key naming convention** (dot notation):
+- `user.preferences.*` - coding style, communication, tooling prefs
+- `project.<name>.*` - architecture, conventions, gotchas for a specific project
+- `task.<name>.*` - status, blockers, next steps for ongoing work
+- `reference.*` - API endpoints, file locations, commands
+
+**Tools:**
+- `memory_set` - store/update (auto-embeds for semantic search)
+- `memory_search` - find by meaning ("how does auth work")
+- `memory_get` - retrieve by exact key
+- `memory_list` - browse with pattern (`project.myapp.*`)
+
+**On session start:** Consider `memory_search` for relevant context if resuming work or if the user's request might relate to stored knowledge.
+
+**When uncertain:** If you don't remember something the user expects you to know, or if they reference past work/decisions, search Total Recall before asking them to repeat themselves.
+
+**Update rule:** When updating a Total Recall entry, always preserve existing detail level. Merge new information into the existing content rather than replacing it with a summary.
+```
+
+Adapt the key naming conventions to fit your workflow. The key insight is instructing Claude to **proactively** save and retrieve — without this, the tool sits idle.
+
 ## Versioning Notes
 
 - **NumPy**: Pinned to `<2.0.0` due to PyTorch compatibility. PyTorch wheels compiled against NumPy 1.x don't work with NumPy 2.x.
