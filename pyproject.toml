@@ -24,6 +24,7 @@ dev = [
 
 [project.scripts]
 total-recall = "total_recall.server:main"
+total-recall-hook = "total_recall.hook:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/total_recall"]

@@ -118,6 +118,82 @@ Use the total-recall MCP to persist knowledge across context resets. **Proactive
 
 Adapt the key naming conventions to fit your workflow. The key insight is instructing Claude to **proactively** save and retrieve — without this, the tool sits idle.
 
+## Claude Code Hook Integration
+
+Total Recall includes a hook that automatically injects relevant memories into your prompts before Claude processes them. This provides context without you needing to ask Claude to search.
+
+### How It Works
+
+The `total-recall-hook` command:
+1. Reads your prompt from stdin (JSON format from Claude Code)
+2. Extracts search terms (ticket IDs like `AR-936`, significant words)
+3. Searches memories: key patterns → semantic embeddings → fulltext
+4. Returns matching memories as `additionalContext` for Claude to see
+
+### Configuration
+
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{
+      "hooks": [{
+        "type": "command",
+        "command": "/path/to/total_recall/.venv/bin/total-recall-hook"
+      }]
+    }]
+  }
+}
+```
+
+Replace `/path/to/total_recall` with your actual installation path.
+
+Alternatively, invoke via Python module:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{
+      "hooks": [{
+        "type": "command",
+        "command": "/path/to/total_recall/.venv/bin/python -m total_recall.hook"
+      }]
+    }]
+  }
+}
+```
+
+### What Gets Injected
+
+The hook searches in priority order:
+
+1. **Key pattern** (`match="key"`) - matches terms against memory keys
+2. **Semantic** (`match="semantic"`) - embedding similarity ≥ 0.3
+3. **Fulltext** (`match="fulltext"`) - substring match in values
+
+Results are formatted as structured XML:
+
+```xml
+<total-recall-context>
+<memory key="project.myapp.architecture" match="semantic" score="0.72" truncated="true" full_length="4500">
+Memory content (truncated to 512 chars)...
+</memory>
+
+<memory key="user.preferences.coding-style" match="key">
+Short memories appear in full without truncation.
+</memory>
+</total-recall-context>
+```
+
+**Attributes:**
+- `key` - memory key (use with `memory_get` for full content)
+- `match` - how it was found: `key`, `semantic`, or `fulltext`
+- `score` - similarity score (semantic matches only)
+- `truncated` / `full_length` - present if content was cut (max 512 chars)
+
+This context is visible to Claude when processing your prompt, giving it relevant memories automatically.
+
 ## Versioning Notes
 
 - **NumPy**: Pinned to `<2.0.0` due to PyTorch compatibility. PyTorch wheels compiled against NumPy 1.x don't work with NumPy 2.x.
