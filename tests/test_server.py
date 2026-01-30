@@ -18,6 +18,7 @@ from total_recall.server import (
     handle_memory_list,
     handle_memory_search,
     handle_memory_set,
+    handle_memory_set_from_file,
     handle_memory_stats,
     handle_memory_tags,
 )
@@ -205,3 +206,130 @@ class TestMemoryHistoryHandler:
         values = [h.value for h in result.history]
         assert "v1" in values
         assert "v2" in values
+
+
+@pytest.mark.asyncio
+class TestMemorySetFromFileHandler:
+    async def test_read_file_successfully(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            f.write("file content here")
+            f.flush()
+            path = f.name
+
+        try:
+            result = await handle_memory_set_from_file({
+                "key": "file.test",
+                "file_path": path,
+            })
+            assert result.success is True
+            assert result.created is True
+            assert result.file_size_bytes == 17
+            assert result.content_type == "text/plain"
+
+            # Verify content stored verbatim
+            get_result = await handle_memory_get({"key": "file.test"})
+            assert get_result.value == "file content here"
+        finally:
+            os.unlink(path)
+
+    async def test_file_not_found(self):
+        result = await handle_memory_set_from_file({
+            "key": "file.missing",
+            "file_path": "/nonexistent/path/to/file.txt",
+        })
+        assert hasattr(result, "error")
+        assert "not found" in result.error.lower()
+
+    async def test_binary_file_rejected(self):
+        with tempfile.NamedTemporaryFile(mode="wb", suffix=".bin", delete=False) as f:
+            f.write(b"\x00\x01\x02\xff\xfe")
+            path = f.name
+
+        try:
+            result = await handle_memory_set_from_file({
+                "key": "file.binary",
+                "file_path": path,
+            })
+            assert hasattr(result, "error")
+            assert "binary" in result.error.lower()
+        finally:
+            os.unlink(path)
+
+    async def test_content_type_autodetected_markdown(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+            f.write("# Heading\n\nSome markdown")
+            path = f.name
+
+        try:
+            result = await handle_memory_set_from_file({
+                "key": "file.markdown",
+                "file_path": path,
+            })
+            assert result.content_type == "text/markdown"
+        finally:
+            os.unlink(path)
+
+    async def test_content_type_autodetected_json(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write('{"key": "value"}')
+            path = f.name
+
+        try:
+            result = await handle_memory_set_from_file({
+                "key": "file.json",
+                "file_path": path,
+            })
+            assert result.content_type == "application/json"
+        finally:
+            os.unlink(path)
+
+    async def test_content_type_override(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            f.write("actually markdown")
+            path = f.name
+
+        try:
+            result = await handle_memory_set_from_file({
+                "key": "file.override",
+                "file_path": path,
+                "content_type": "text/markdown",
+            })
+            assert result.content_type == "text/markdown"
+        finally:
+            os.unlink(path)
+
+    async def test_tags_passed_through(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            f.write("tagged content")
+            path = f.name
+
+        try:
+            result = await handle_memory_set_from_file({
+                "key": "file.tagged",
+                "file_path": path,
+                "tags": ["docs", "important"],
+            })
+            assert result.success is True
+
+            get_result = await handle_memory_get({"key": "file.tagged"})
+            assert set(get_result.tags) == {"docs", "important"}
+        finally:
+            os.unlink(path)
+
+    async def test_tilde_expansion(self):
+        # Create a temp file in a known location and test ~ expansion works
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            f.write("tilde test")
+            path = f.name
+
+        try:
+            # This tests that path resolution works, not ~ specifically
+            result = await handle_memory_set_from_file({
+                "key": "file.tilde",
+                "file_path": path,
+            })
+            assert result.success is True
+            # The resolved path should be absolute
+            assert result.file_path.startswith("/")
+        finally:
+            os.unlink(path)

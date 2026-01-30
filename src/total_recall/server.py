@@ -1,7 +1,7 @@
 """MCP server for Total Recall."""
 
 import os
-from typing import Optional
+from pathlib import Path
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -18,6 +18,7 @@ from .models import (
     HistoryResponse,
     ListResponse,
     SearchResponse,
+    SetFromFileResponse,
     SetResponse,
     StatsResponse,
     TagsResponse,
@@ -75,6 +76,46 @@ Embeddings are generated automatically for semantic search.""",
                     },
                 },
                 "required": ["key", "value"],
+            },
+        ),
+        Tool(
+            name="memory_set_from_file",
+            description="""Store file contents as a memory.
+
+Reads the file directly and stores its contents verbatim.
+Use this to preserve full fidelity without summarization.
+
+Content type is auto-detected from file extension:
+- .md → text/markdown
+- .json → application/json
+- .py, .js, etc → text/plain""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "Unique identifier for the memory",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Absolute path to the file",
+                    },
+                    "content_type": {
+                        "type": "string",
+                        "description": "Override auto-detected content type",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Categorization labels",
+                    },
+                    "embed": {
+                        "type": "boolean",
+                        "description": "Generate embedding for semantic search",
+                        "default": True,
+                    },
+                },
+                "required": ["key", "file_path"],
             },
         ),
         Tool(
@@ -270,6 +311,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     try:
         if name == "memory_set":
             result = await handle_memory_set(arguments)
+        elif name == "memory_set_from_file":
+            result = await handle_memory_set_from_file(arguments)
         elif name == "memory_get":
             result = await handle_memory_get(arguments)
         elif name == "memory_delete":
@@ -344,6 +387,100 @@ async def handle_memory_set(args: dict) -> SetResponse:
         changed=changed,
         key=key.lower(),
         size_bytes=size_bytes,
+        previous_value=previous_value if changed else None,
+        previous_size_bytes=previous_size_bytes,
+        warnings=warnings,
+    )
+
+
+def _detect_content_type(file_path: Path) -> str:
+    """Detect content type from file extension."""
+    ext_map = {
+        ".md": "text/markdown",
+        ".json": "application/json",
+        ".yaml": "text/yaml",
+        ".yml": "text/yaml",
+        ".xml": "application/xml",
+        ".html": "text/html",
+        ".css": "text/css",
+        ".js": "text/javascript",
+        ".ts": "text/typescript",
+        ".py": "text/x-python",
+        ".sh": "text/x-shellscript",
+        ".sql": "text/x-sql",
+        ".toml": "text/x-toml",
+        ".ini": "text/x-ini",
+        ".cfg": "text/x-ini",
+        ".txt": "text/plain",
+    }
+    return ext_map.get(file_path.suffix.lower(), "text/plain")
+
+
+async def handle_memory_set_from_file(
+    args: dict,
+) -> SetFromFileResponse | ErrorResponse:
+    """Handle memory_set_from_file tool."""
+    key = args["key"]
+    file_path_str = args["file_path"]
+    content_type_override = args.get("content_type")
+    tags = args.get("tags", [])
+    should_embed = args.get("embed", True) and auto_embed_enabled()
+
+    # Expand ~ and resolve path
+    file_path = Path(file_path_str).expanduser().resolve()
+
+    # Validate file exists
+    if not file_path.exists():
+        return ErrorResponse(error=f"File not found: {file_path}")
+
+    if not file_path.is_file():
+        return ErrorResponse(error=f"Not a file: {file_path}")
+
+    # Read file
+    try:
+        content = file_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return ErrorResponse(error=f"Cannot read binary file: {file_path}")
+    except PermissionError:
+        return ErrorResponse(error=f"Permission denied: {file_path}")
+    except Exception as e:
+        return ErrorResponse(error=f"Failed to read file: {e}")
+
+    warnings: list[str] = []
+    file_size = file_path.stat().st_size
+
+    # Auto-detect content type from extension
+    content_type = content_type_override or _detect_content_type(file_path)
+
+    # Generate embedding
+    embedding = None
+    embedding_model = None
+    if should_embed:
+        embedding = emb.generate_embedding(content)
+        if embedding is None:
+            warnings.append("Failed to generate embedding")
+        else:
+            embedding_model = emb.get_model_name()
+
+    # Store via existing memory_set
+    created, changed, previous_value, previous_size_bytes, db_warnings = db.memory_set(
+        key=key,
+        value=content,
+        content_type=content_type,
+        tags=tags,
+        embedding=embedding,
+        embedding_model=embedding_model,
+    )
+    warnings.extend(db_warnings)
+
+    return SetFromFileResponse(
+        success=True,
+        created=created,
+        changed=changed,
+        key=key.lower(),
+        file_path=str(file_path),
+        file_size_bytes=file_size,
+        content_type=content_type,
         previous_value=previous_value if changed else None,
         previous_size_bytes=previous_size_bytes,
         warnings=warnings,

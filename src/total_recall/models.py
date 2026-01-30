@@ -81,6 +81,21 @@ class SetResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class SetFromFileResponse(BaseModel):
+    """Response from memory_set_from_file."""
+
+    success: bool
+    created: bool
+    changed: bool
+    key: str
+    file_path: str
+    file_size_bytes: int
+    content_type: str
+    previous_value: Optional[str] = None
+    previous_size_bytes: Optional[int] = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 class GetResponse(BaseModel):
     """Response from memory_get."""
 

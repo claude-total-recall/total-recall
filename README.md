@@ -44,6 +44,7 @@ Add to your Claude configuration:
 | Tool | Description |
 |------|-------------|
 | `memory_set` | Store or update a memory |
+| `memory_set_from_file` | Store file contents verbatim (bypasses agent summarization) |
 | `memory_get` | Retrieve by exact key |
 | `memory_delete` | Remove a memory |
 | `memory_list` | Browse with pattern/tag filtering |
@@ -99,6 +100,7 @@ Use the total-recall MCP to persist knowledge across context resets. **Proactive
 
 **Tools:**
 - `memory_set` - store/update (auto-embeds for semantic search)
+- `memory_set_from_file` - store file contents verbatim (MCP reads file directly)
 - `memory_get` - retrieve by exact key
 - `memory_delete` - remove a memory
 - `memory_list` - browse with pattern (`project.myapp.*`)
@@ -126,7 +128,7 @@ Total Recall includes a hook that automatically injects relevant memories into y
 
 The `total-recall-hook` command:
 1. Reads your prompt from stdin (JSON format from Claude Code)
-2. Extracts search terms (ticket IDs like `AR-936`, significant words)
+2. Extracts search terms (ticket IDs like `PROJ-123`, significant words)
 3. Searches memories: key patterns → semantic embeddings → fulltext
 4. Returns matching memories as `additionalContext` for Claude to see
 
