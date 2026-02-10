@@ -97,7 +97,7 @@ def init_db():
         """)
 
 
-def _serialize_embedding(embedding: Optional[list[float]]) -> Optional[bytes]:
+def serialize_embedding(embedding: Optional[list[float]]) -> Optional[bytes]:
     """Serialize embedding to bytes for storage."""
     if embedding is None:
         return None
@@ -116,7 +116,7 @@ def _deserialize_embedding(data: Optional[bytes]) -> Optional[list[float]]:
     return list(struct.unpack(f"{count}f", data))
 
 
-def _normalize_key(key: str) -> str:
+def normalize_key(key: str) -> str:
     """Normalize key to lowercase."""
     return key.lower()
 
@@ -128,7 +128,7 @@ def _normalize_tag(tag: str) -> str:
 
 def memory_exists(key: str) -> bool:
     """Check if a memory exists."""
-    key = _normalize_key(key)
+    key = normalize_key(key)
     with get_connection() as conn:
         row = conn.execute(
             "SELECT 1 FROM memories WHERE key = ?", (key,)
@@ -149,7 +149,7 @@ def memory_set(
     Returns:
         Tuple of (created, changed, previous_value, previous_size_bytes, warnings)
     """
-    key = _normalize_key(key)
+    key = normalize_key(key)
     tags = [_normalize_tag(t) for t in (tags or []) if t.strip()]
     tags = list(set(tags))  # deduplicate
     warnings = []
@@ -181,7 +181,7 @@ def memory_set(
                     now,
                     now,
                     now,
-                    _serialize_embedding(embedding),
+                    serialize_embedding(embedding),
                     embedding_model,
                 ),
             )
@@ -216,7 +216,7 @@ def memory_set(
                     UPDATE memories SET content_type = ?, embedding = ?, embedding_model = ?
                     WHERE key = ?
                     """,
-                    (content_type, _serialize_embedding(embedding), embedding_model, key),
+                    (content_type, serialize_embedding(embedding), embedding_model, key),
                 )
             else:
                 conn.execute(
@@ -266,7 +266,7 @@ def memory_set(
                 value,
                 content_type,
                 now,
-                _serialize_embedding(embedding),
+                serialize_embedding(embedding),
                 embedding_model,
                 key,
             ),
@@ -289,7 +289,7 @@ def memory_get(key: str) -> tuple[Optional[MemoryRecord], list[str]]:
     Returns:
         Tuple of (record or None, warnings)
     """
-    key = _normalize_key(key)
+    key = normalize_key(key)
     warnings = []
 
     with get_connection() as conn:
@@ -342,7 +342,7 @@ def memory_delete(key: str) -> tuple[bool, list[str]]:
     Returns:
         Tuple of (deleted, warnings)
     """
-    key = _normalize_key(key)
+    key = normalize_key(key)
     warnings = []
 
     with get_connection() as conn:
@@ -513,7 +513,7 @@ def get_all_embeddings() -> list[tuple[str, list[float]]]:
 
 def get_memory_value(key: str) -> Optional[str]:
     """Get just the value for a memory (without access tracking)."""
-    key = _normalize_key(key)
+    key = normalize_key(key)
     with get_connection() as conn:
         row = conn.execute(
             "SELECT value FROM memories WHERE key = ?", (key,)
@@ -523,7 +523,7 @@ def get_memory_value(key: str) -> Optional[str]:
 
 def get_memory_with_tags(key: str) -> Optional[tuple[str, str, list[str]]]:
     """Get value, content_type, and tags for a memory (without access tracking)."""
-    key = _normalize_key(key)
+    key = normalize_key(key)
     with get_connection() as conn:
         row = conn.execute(
             "SELECT value, content_type FROM memories WHERE key = ?", (key,)
@@ -592,7 +592,7 @@ def get_history(key: str, limit: int = 10) -> tuple[list[HistoryEntry], bool, li
     Returns:
         Tuple of (history_entries, truncated, warnings)
     """
-    key = _normalize_key(key)
+    key = normalize_key(key)
     warnings = []
 
     with get_connection() as conn:
@@ -641,9 +641,142 @@ def get_all_keys() -> list[str]:
 
 def update_embedding(key: str, embedding: list[float], model: str):
     """Update the embedding for a specific key."""
-    key = _normalize_key(key)
+    key = normalize_key(key)
     with get_connection() as conn:
         conn.execute(
             "UPDATE memories SET embedding = ?, embedding_model = ? WHERE key = ?",
-            (_serialize_embedding(embedding), model, key),
+            (serialize_embedding(embedding), model, key),
         )
+
+
+# --- Export / Import functions for backup & network sharing ---
+
+
+def resolve_key_patterns(patterns: list[str]) -> list[str]:
+    """Expand glob patterns to matching keys via SQL LIKE.
+
+    Patterns use '*' as wildcard (converted to SQL '%'). Deduplicates results.
+    """
+    with get_connection() as conn:
+        keys: set[str] = set()
+        for pattern in patterns:
+            sql_pattern = pattern.replace("*", "%")
+            rows = conn.execute(
+                "SELECT key FROM memories WHERE key LIKE ?", (sql_pattern,)
+            ).fetchall()
+            keys.update(row["key"] for row in rows)
+        return sorted(keys)
+
+
+def get_memories_for_export(
+    keys: list[str],
+    include_history: bool = True,
+    include_embeddings: bool = False,
+) -> list[dict]:
+    """Bulk read memories for export with tags, optional history and embeddings."""
+    import base64
+
+    with get_connection() as conn:
+        results = []
+        for key in keys:
+            row = conn.execute(
+                """SELECT key, value, content_type, created_at, updated_at,
+                          access_count, embedding, embedding_model
+                   FROM memories WHERE key = ?""",
+                (key,),
+            ).fetchone()
+            if row is None:
+                continue
+
+            entry: dict = {
+                "key": row["key"],
+                "value": row["value"],
+                "content_type": row["content_type"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "access_count": row["access_count"],
+            }
+
+            # Tags
+            tag_rows = conn.execute(
+                "SELECT tag FROM tags WHERE key = ?", (key,)
+            ).fetchall()
+            entry["tags"] = [r["tag"] for r in tag_rows]
+
+            # History
+            if include_history:
+                hist_rows = conn.execute(
+                    """SELECT value, content_type, changed_at FROM history
+                       WHERE key = ? ORDER BY changed_at ASC""",
+                    (key,),
+                ).fetchall()
+                entry["history"] = [
+                    {
+                        "value": h["value"],
+                        "content_type": h["content_type"],
+                        "changed_at": h["changed_at"],
+                    }
+                    for h in hist_rows
+                ]
+
+            # Embeddings
+            if include_embeddings and row["embedding"] is not None:
+                entry["embedding"] = base64.b64encode(row["embedding"]).decode()
+                entry["embedding_model"] = row["embedding_model"]
+
+            results.append(entry)
+        return results
+
+
+def import_memory(
+    conn,
+    key: str,
+    value: str,
+    content_type: str,
+    tags: list[str],
+    created_at: str,
+    updated_at: str,
+    history: Optional[list[dict]] = None,
+    embedding_bytes: Optional[bytes] = None,
+    embedding_model: Optional[str] = None,
+):
+    """Import a single memory using an existing connection (for atomicity).
+
+    Deletes existing key first (cascade cleans tags + history), inserts fresh
+    with access_count=0, accessed_at=now. Preserves source created_at/updated_at.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Delete existing (cascade handles tags + history)
+    conn.execute("DELETE FROM memories WHERE key = ?", (key,))
+
+    conn.execute(
+        """INSERT INTO memories (key, value, content_type, created_at, updated_at,
+                                accessed_at, access_count, embedding, embedding_model)
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)""",
+        (key, value, content_type, created_at, updated_at, now,
+         embedding_bytes, embedding_model),
+    )
+
+    for tag in tags:
+        conn.execute(
+            "INSERT OR IGNORE INTO tags (key, tag) VALUES (?, ?)", (key, tag)
+        )
+
+    if history:
+        for h in history:
+            conn.execute(
+                """INSERT INTO history (key, value, content_type, changed_at)
+                   VALUES (?, ?, ?, ?)""",
+                (key, h["value"], h.get("content_type"), h["changed_at"]),
+            )
+
+
+def get_memory_updated_at(key: str) -> Optional[str]:
+    """Lightweight timestamp lookup for merge strategy. No access tracking."""
+    key = normalize_key(key)
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT updated_at FROM memories WHERE key = ?", (key,)
+        ).fetchone()
+        return row["updated_at"] if row else None

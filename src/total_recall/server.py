@@ -7,9 +7,13 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
+from . import crypto
 from . import db
 from . import embeddings as emb
+from . import net
+from . import serialization
 from .models import (
+    BackupResponse,
     DeleteResponse,
     EmbedResponse,
     ErrorResponse,
@@ -17,6 +21,7 @@ from .models import (
     GetResponse,
     HistoryResponse,
     ListResponse,
+    RestoreResponse,
     SearchResponse,
     SetFromFileResponse,
     SetResponse,
@@ -302,6 +307,76 @@ related context when you don't know exact keys.""",
                 "required": ["key"],
             },
         ),
+        Tool(
+            name="memory_backup",
+            description="""Create an encrypted backup of memories.
+
+Exports selected memories to a password-protected .trbak file.
+Defaults to ~/.total_recall/backups/ with a timestamped filename.
+Use 'keys' glob to select which memories to include.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "password": {
+                        "type": "string",
+                        "description": "Encryption password",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Output file path (default: auto-generated in ~/.total_recall/backups/)",
+                    },
+                    "keys": {
+                        "type": "string",
+                        "description": "Glob filter for which memories to include (default: '*' = all)",
+                        "default": "*",
+                    },
+                    "include_history": {
+                        "type": "boolean",
+                        "description": "Include version history",
+                        "default": True,
+                    },
+                    "include_embeddings": {
+                        "type": "boolean",
+                        "description": "Include embedding vectors (large, regenerable)",
+                        "default": False,
+                    },
+                },
+                "required": ["password"],
+            },
+        ),
+        Tool(
+            name="memory_restore",
+            description="""Restore memories from an encrypted .trbak backup file.
+
+Decrypts and imports memories with configurable merge strategy.
+Memories are auto-embedded on import if they lack embeddings.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "password": {
+                        "type": "string",
+                        "description": "Decryption password",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Path to .trbak backup file",
+                    },
+                    "key_filter": {
+                        "type": "string",
+                        "description": "Only restore memories matching this glob (default: '*')",
+                        "default": "*",
+                    },
+                    "merge": {
+                        "type": "string",
+                        "description": "Merge strategy: 'newer_wins', 'skip_existing', or 'overwrite'",
+                        "default": "newer_wins",
+                        "enum": ["newer_wins", "skip_existing", "overwrite"],
+                    },
+                },
+                "required": ["password", "path"],
+            },
+        ),
+        *net.net_tools(),
     ]
 
 
@@ -331,6 +406,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = await handle_memory_embed(arguments)
         elif name == "memory_history":
             result = await handle_memory_history(arguments)
+        elif name == "memory_backup":
+            result = await handle_memory_backup(arguments)
+        elif name == "memory_restore":
+            result = await handle_memory_restore(arguments)
+        elif name == "memory_listen":
+            result = await net.handle_memory_listen(arguments)
+        elif name == "memory_send":
+            result = await net.handle_memory_send(arguments)
         else:
             result = ErrorResponse(error=f"Unknown tool: {name}")
 
@@ -716,6 +799,106 @@ async def handle_memory_history(args: dict) -> HistoryResponse:
         history=entries,
         truncated=truncated,
         warnings=warnings,
+    )
+
+
+async def handle_memory_backup(args: dict) -> BackupResponse | ErrorResponse:
+    """Handle memory_backup tool."""
+    import struct
+
+    password = args["password"]
+    keys_pattern = args.get("keys", "*")
+    include_history = args.get("include_history", True)
+    include_embeddings = args.get("include_embeddings", False)
+
+    # Default path
+    if "path" in args and args["path"]:
+        backup_path = Path(args["path"]).expanduser().resolve()
+    else:
+        from datetime import datetime as dt
+
+        backup_dir = Path.home() / ".total_recall" / "backups"
+        timestamp = dt.now().strftime("%Y-%m-%dT%H%M")
+        backup_path = backup_dir / f"backup_{timestamp}.trbak"
+
+    # Serialize
+    payload = serialization.serialize_memories(
+        keys=[keys_pattern],
+        include_history=include_history,
+        include_embeddings=include_embeddings,
+    )
+
+    if not payload["memories"]:
+        return ErrorResponse(error="No memories matched the key pattern")
+
+    # Encrypt
+    salt, ciphertext = crypto.encrypt_payload(payload, password)
+
+    # Write file
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(backup_path, "wb") as f:
+        f.write(b"TRBK")                              # 4 bytes magic
+        f.write(struct.pack(">H", 1))                  # 2 bytes version
+        f.write(salt)                                   # 16 bytes salt
+        f.write(struct.pack(">I", len(ciphertext)))     # 4 bytes payload length
+        f.write(ciphertext)                             # N bytes ciphertext
+
+    file_size = backup_path.stat().st_size
+
+    return BackupResponse(
+        success=True,
+        path=str(backup_path),
+        memory_count=len(payload["memories"]),
+        size_bytes=file_size,
+    )
+
+
+async def handle_memory_restore(args: dict) -> RestoreResponse | ErrorResponse:
+    """Handle memory_restore tool."""
+    import struct
+
+    from cryptography.fernet import InvalidToken
+
+    password = args["password"]
+    path = Path(args["path"]).expanduser().resolve()
+    key_filter = args.get("key_filter", "*")
+    merge = args.get("merge", "newer_wins")
+
+    if not path.exists():
+        return ErrorResponse(error=f"File not found: {path}")
+
+    with open(path, "rb") as f:
+        # Read header
+        magic = f.read(4)
+        if magic != b"TRBK":
+            return ErrorResponse(error=f"Not a valid .trbak file (bad magic: {magic!r})")
+
+        version = struct.unpack(">H", f.read(2))[0]
+        if version != 1:
+            return ErrorResponse(error=f"Unsupported backup version: {version}")
+
+        salt = f.read(16)
+        payload_len = struct.unpack(">I", f.read(4))[0]
+        ciphertext = f.read(payload_len)
+
+    # Decrypt
+    try:
+        payload = crypto.decrypt_payload(ciphertext, password, salt)
+    except InvalidToken:
+        return ErrorResponse(error="Decryption failed — wrong password")
+
+    # Deserialize and import
+    result = serialization.deserialize_memories(
+        payload, key_filter=key_filter, merge=merge, auto_embed=True
+    )
+
+    return RestoreResponse(
+        success=True,
+        restored=result.restored,
+        skipped=result.skipped,
+        conflicts=result.conflicts,
+        warnings=result.warnings,
     )
 
 

@@ -176,6 +176,65 @@ class HistoryResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class ImportResult(BaseModel):
+    """Internal result from deserialize_memories — shared by restore + listen."""
+
+    restored: int = 0
+    skipped: int = 0
+    filtered: int = 0
+    conflicts: int = 0
+    embedded: int = 0
+    embed_failed: int = 0
+    keys_stored: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class BackupResponse(BaseModel):
+    """Response from memory_backup."""
+
+    success: bool
+    path: str
+    memory_count: int
+    size_bytes: int
+    warnings: list[str] = Field(default_factory=list)
+
+
+class RestoreResponse(BaseModel):
+    """Response from memory_restore."""
+
+    success: bool
+    restored: int = 0
+    skipped: int = 0
+    conflicts: int = 0
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ListenResponse(BaseModel):
+    """Response from memory_listen."""
+
+    success: bool
+    received: int = 0
+    filtered: int = 0
+    skipped: int = 0
+    keys_stored: list[str] = Field(default_factory=list)
+    elapsed: float = 0.0
+    timed_out: bool = False
+    error: Optional[str] = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SendResponse(BaseModel):
+    """Response from memory_send."""
+
+    success: bool
+    sent: int = 0
+    accepted: int = 0
+    filtered: int = 0
+    skipped: int = 0
+    error: Optional[str] = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 class ErrorResponse(BaseModel):
     """Error response for fatal errors."""
 
