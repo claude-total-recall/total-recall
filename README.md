@@ -43,7 +43,7 @@ Add to your Claude configuration:
 
 | Tool | Description |
 |------|-------------|
-| `memory_set` | Store or update a memory |
+| `memory_set` | Store or update a memory (clobber guard enforced) |
 | `memory_set_from_file` | Store file contents verbatim (bypasses agent summarization) |
 | `memory_get` | Retrieve by exact key |
 | `memory_delete` | Remove a memory |
@@ -54,6 +54,21 @@ Add to your Claude configuration:
 | `memory_stats` | Storage statistics |
 | `memory_embed` | Force embedding regeneration |
 | `memory_history` | Version history for a key |
+
+### Clobber Guard
+
+`memory_set` includes a write guard that prevents AI callers from accidentally overwriting rich content with shorter rewrites.
+
+**How it works:** When updating an existing key, if the caller hasn't read it (via `memory_get`) since its last update AND the new content is smaller, the write is **blocked**. The response includes `blocked: true`, `success: false`, and `previous_value` containing the existing content so the caller can construct a proper merge.
+
+| Scenario | Result |
+|----------|--------|
+| New key | Allowed |
+| Read since last write, any size | Allowed |
+| Not read, content growing | Allowed (with warning) |
+| Not read, content shrinking | **Blocked** |
+
+This uses the existing `accessed_at` / `updated_at` timestamps — no schema changes required. The existing >50% truncation warning still fires as a soft warning after the guard passes.
 
 ## Configuration
 

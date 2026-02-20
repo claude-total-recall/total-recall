@@ -75,6 +75,8 @@ class TestMemorySetHandler:
 
     async def test_returns_previous_value_on_update(self):
         await handle_memory_set({"key": "test.prev", "value": "original content"})
+        # Read first to satisfy clobber guard
+        await handle_memory_get({"key": "test.prev"})
         result = await handle_memory_set({"key": "test.prev", "value": "new"})
         assert result.previous_value == "original content"
         assert result.previous_size_bytes == len("original content".encode("utf-8"))
@@ -88,6 +90,8 @@ class TestMemorySetHandler:
         # Create with large content
         large_content = "x" * 1000
         await handle_memory_set({"key": "test.truncate", "value": large_content})
+        # Read first to satisfy clobber guard
+        await handle_memory_get({"key": "test.truncate"})
         # Update with much smaller content (>50% reduction)
         result = await handle_memory_set({"key": "test.truncate", "value": "tiny"})
         assert any("reduced by >50%" in w for w in result.warnings)
@@ -95,8 +99,44 @@ class TestMemorySetHandler:
 
     async def test_no_truncation_warning_above_threshold(self):
         await handle_memory_set({"key": "test.ok", "value": "1234567890"})  # 10 bytes
+        # Read first to satisfy clobber guard
+        await handle_memory_get({"key": "test.ok"})
         result = await handle_memory_set({"key": "test.ok", "value": "123456"})  # 6 bytes, 60%
         assert not any("reduced by >50%" in w for w in result.warnings)
+
+
+@pytest.mark.asyncio
+class TestClobberGuardHandler:
+    async def test_clobber_guard_blocks_shrinking_unread(self):
+        """Set key with long content, set again with short without reading → blocked."""
+        await handle_memory_set({"key": "guard.block", "value": "long content that should be preserved"})
+        result = await handle_memory_set({"key": "guard.block", "value": "short"})
+        assert result.blocked is True
+        assert result.success is False
+        assert result.previous_value == "long content that should be preserved"
+
+    async def test_clobber_guard_allows_after_read(self):
+        """Set key, call memory_get, set with smaller content → allowed."""
+        await handle_memory_set({"key": "guard.allow", "value": "long content here"})
+        await handle_memory_get({"key": "guard.allow"})
+        result = await handle_memory_set({"key": "guard.allow", "value": "short"})
+        assert result.blocked is False
+        assert result.changed is True
+
+    async def test_clobber_guard_warns_growing_unread(self):
+        """Set key, set with larger content without reading → allowed with warning."""
+        await handle_memory_set({"key": "guard.grow", "value": "short"})
+        result = await handle_memory_set({"key": "guard.grow", "value": "this is much longer content"})
+        assert result.blocked is False
+        assert result.changed is True
+        assert any("Caution" in w for w in result.warnings)
+
+    async def test_clobber_guard_skips_new_keys(self):
+        """Set brand new key → created, no guard."""
+        result = await handle_memory_set({"key": "guard.new", "value": "fresh content"})
+        assert result.created is True
+        assert result.blocked is False
+        assert not any("BLOCKED" in w for w in result.warnings)
 
 
 @pytest.mark.asyncio

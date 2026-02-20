@@ -74,6 +74,7 @@ class SetResponse(BaseModel):
     success: bool
     created: bool
     changed: bool
+    blocked: bool = False
     key: str
     size_bytes: int
     previous_value: Optional[str] = None
@@ -87,6 +88,7 @@ class SetFromFileResponse(BaseModel):
     success: bool
     created: bool
     changed: bool
+    blocked: bool = False
     key: str
     file_path: str
     file_size_bytes: int

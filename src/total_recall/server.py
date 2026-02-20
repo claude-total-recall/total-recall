@@ -52,7 +52,12 @@ Use this to save:
 
 Keys should use dot notation (e.g., "project.myapp.conventions").
 Content can be plain text, markdown, or JSON.
-Embeddings are generated automatically for semantic search.""",
+Embeddings are generated automatically for semantic search.
+
+**Clobber guard:** When updating an existing key, if you haven't read it
+(via memory_get) since its last update AND your new content is smaller,
+the write will be BLOCKED and the existing content returned. Call memory_get
+first, then resubmit with properly merged content.""",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -443,7 +448,7 @@ async def handle_memory_set(args: dict) -> SetResponse:
         else:
             embedding_model = emb.get_model_name()
 
-    created, changed, previous_value, previous_size_bytes, db_warnings = db.memory_set(
+    created, changed, previous_value, previous_size_bytes, db_warnings, blocked = db.memory_set(
         key=key,
         value=value,
         content_type=content_type,
@@ -456,6 +461,19 @@ async def handle_memory_set(args: dict) -> SetResponse:
 
     # Calculate current size
     size_bytes = len(value.encode("utf-8"))
+
+    if blocked:
+        return SetResponse(
+            success=False,
+            created=False,
+            changed=False,
+            blocked=True,
+            key=key.lower(),
+            size_bytes=size_bytes,
+            previous_value=previous_value,
+            previous_size_bytes=previous_size_bytes,
+            warnings=warnings,
+        )
 
     # Warn if content significantly reduced (potential accidental truncation)
     if changed and previous_size_bytes is not None and size_bytes < previous_size_bytes * 0.5:
@@ -546,7 +564,7 @@ async def handle_memory_set_from_file(
             embedding_model = emb.get_model_name()
 
     # Store via existing memory_set
-    created, changed, previous_value, previous_size_bytes, db_warnings = db.memory_set(
+    created, changed, previous_value, previous_size_bytes, db_warnings, blocked = db.memory_set(
         key=key,
         value=content,
         content_type=content_type,
@@ -555,6 +573,21 @@ async def handle_memory_set_from_file(
         embedding_model=embedding_model,
     )
     warnings.extend(db_warnings)
+
+    if blocked:
+        return SetFromFileResponse(
+            success=False,
+            created=False,
+            changed=False,
+            blocked=True,
+            key=key.lower(),
+            file_path=str(file_path),
+            file_size_bytes=file_size,
+            content_type=content_type,
+            previous_value=previous_value,
+            previous_size_bytes=previous_size_bytes,
+            warnings=warnings,
+        )
 
     return SetFromFileResponse(
         success=True,

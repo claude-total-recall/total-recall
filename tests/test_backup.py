@@ -42,7 +42,8 @@ def _seed_memories():
     db.memory_set("project.alpha", "alpha content", tags=["test"])
     db.memory_set("project.beta", "beta content", tags=["test", "beta"])
     db.memory_set("other.key", "other content")
-    # Create some history
+    # Create some history (read first to satisfy clobber guard)
+    db.memory_get("project.alpha")
     db.memory_set("project.alpha", "alpha v2")
 
 

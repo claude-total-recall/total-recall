@@ -143,11 +143,11 @@ def memory_set(
     tags: Optional[list[str]] = None,
     embedding: Optional[list[float]] = None,
     embedding_model: Optional[str] = None,
-) -> tuple[bool, bool, Optional[str], Optional[int], list[str]]:
+) -> tuple[bool, bool, Optional[str], Optional[int], list[str], bool]:
     """Create or update a memory.
 
     Returns:
-        Tuple of (created, changed, previous_value, previous_size_bytes, warnings)
+        Tuple of (created, changed, previous_value, previous_size_bytes, warnings, blocked)
     """
     key = normalize_key(key)
     tags = [_normalize_tag(t) for t in (tags or []) if t.strip()]
@@ -163,7 +163,7 @@ def memory_set(
 
         # Check existing
         existing = conn.execute(
-            "SELECT value, content_type FROM memories WHERE key = ?", (key,)
+            "SELECT value, content_type, accessed_at, updated_at FROM memories WHERE key = ?", (key,)
         ).fetchone()
 
         if existing is None:
@@ -193,11 +193,34 @@ def memory_set(
                     (key, tag),
                 )
 
-            return True, True, None, None, warnings
+            return True, True, None, None, warnings, False
 
         # Update existing
         old_value = existing["value"]
         old_size = len(old_value.encode("utf-8"))
+        new_size = len(value.encode("utf-8"))
+
+        # Clobber guard
+        read_since_last_write = (
+            existing["accessed_at"] is not None
+            and existing["updated_at"] is not None
+            and existing["accessed_at"] > existing["updated_at"]
+        )
+
+        if not read_since_last_write and new_size < old_size:
+            warnings.append(
+                "BLOCKED: Memory not read (via memory_get) since last update, "
+                "and new content is smaller. Read the existing content first, "
+                "then resubmit with properly merged content. "
+                "Rule: update metadata in-place, never remove analytical content — only append."
+            )
+            return False, False, old_value, old_size, warnings, True
+
+        if not read_since_last_write:
+            warnings.append(
+                "Caution: Memory not read (via memory_get) since last update. "
+                "Content is growing so proceeding, but read first to avoid data loss."
+            )
 
         if old_value == value:
             # No change to value - only update tags if needed
@@ -225,7 +248,7 @@ def memory_set(
                 )
 
             # No change - return previous value info but changed=False
-            return False, False, old_value, old_size, warnings
+            return False, False, old_value, old_size, warnings, False
 
         # Value changed - record history if enabled
         if history_enabled():
@@ -280,7 +303,7 @@ def memory_set(
                 (key, tag),
             )
 
-        return False, True, old_value, old_size, warnings
+        return False, True, old_value, old_size, warnings, False
 
 
 def memory_get(key: str) -> tuple[Optional[MemoryRecord], list[str]]:

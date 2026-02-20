@@ -36,28 +36,33 @@ def init_database():
 
 class TestMemorySet:
     def test_create_new_memory(self):
-        created, changed, prev_val, prev_size, warnings = db.memory_set("test.key", "test value")
+        created, changed, prev_val, prev_size, warnings, blocked = db.memory_set("test.key", "test value")
         assert created is True
         assert changed is True
         assert prev_val is None
         assert prev_size is None
         assert warnings == []
+        assert blocked is False
 
     def test_update_existing_memory(self):
         db.memory_set("update.key", "original")
-        created, changed, prev_val, prev_size, warnings = db.memory_set("update.key", "updated")
+        # Read first to satisfy clobber guard
+        db.memory_get("update.key")
+        created, changed, prev_val, prev_size, warnings, blocked = db.memory_set("update.key", "updated")
         assert created is False
         assert changed is True
         assert prev_val == "original"
         assert prev_size == len("original".encode("utf-8"))
+        assert blocked is False
 
     def test_no_change_same_value(self):
         db.memory_set("same.key", "same value")
-        created, changed, prev_val, prev_size, warnings = db.memory_set("same.key", "same value")
+        created, changed, prev_val, prev_size, warnings, blocked = db.memory_set("same.key", "same value")
         assert created is False
         assert changed is False
         assert prev_val == "same value"
         assert prev_size == len("same value".encode("utf-8"))
+        assert blocked is False
 
     def test_key_normalized_to_lowercase(self):
         db.memory_set("MyKey", "value")
@@ -77,8 +82,27 @@ class TestMemorySet:
 
     def test_size_warning(self):
         large_value = "x" * (101 * 1024)
-        _, _, _, _, warnings = db.memory_set("large", large_value)
+        _, _, _, _, warnings, _ = db.memory_set("large", large_value)
         assert any("100KB" in w for w in warnings)
+
+
+class TestClobberGuard:
+    def test_memory_set_returns_blocked_flag(self):
+        """Verify 6th element of return tuple is the blocked flag."""
+        db.memory_set("guard.flag", "long content here")
+        result = db.memory_set("guard.flag", "short")
+        assert len(result) == 6
+        assert result[5] is True  # blocked
+
+    def test_blocked_write_preserves_original(self):
+        """Set key, attempt blocked write, verify DB value unchanged."""
+        db.memory_set("guard.preserve", "original long content that should not be lost")
+        # Attempt smaller write without reading first
+        _, _, _, _, _, blocked = db.memory_set("guard.preserve", "tiny")
+        assert blocked is True
+        # Verify DB still has original
+        record, _ = db.memory_get("guard.preserve")
+        assert record.value == "original long content that should not be lost"
 
 
 class TestMemoryGet:
