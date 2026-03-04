@@ -274,3 +274,62 @@ class TestRestore:
         record, _ = db.memory_get("project.alpha")
         # access_count should be 1 (from the get we just did), not 2+
         assert record.access_count == 1
+
+    @pytest.mark.asyncio
+    async def test_restore_returns_keys_stored(self, tmp_backup):
+        _seed_memories()
+        await handle_memory_backup({
+            "password": "pw",
+            "path": str(tmp_backup),
+        })
+
+        with db.get_connection() as conn:
+            conn.execute("DELETE FROM history")
+            conn.execute("DELETE FROM tags")
+            conn.execute("DELETE FROM memories")
+
+        result = await handle_memory_restore({
+            "password": "pw",
+            "path": str(tmp_backup),
+        })
+        assert result.success is True
+        assert result.restored == 3
+        assert set(result.keys_stored) == {"project.alpha", "project.beta", "other.key"}
+
+    @pytest.mark.asyncio
+    async def test_restore_keys_stored_excludes_skipped(self, tmp_backup):
+        _seed_memories()
+        await handle_memory_backup({
+            "password": "pw",
+            "path": str(tmp_backup),
+        })
+
+        # Don't clear — all keys exist, skip_existing rejects all
+        result = await handle_memory_restore({
+            "password": "pw",
+            "path": str(tmp_backup),
+            "merge": "skip_existing",
+        })
+        assert result.skipped == 3
+        assert result.keys_stored == []
+
+    @pytest.mark.asyncio
+    async def test_restore_keys_stored_with_key_filter(self, tmp_backup):
+        _seed_memories()
+        await handle_memory_backup({
+            "password": "pw",
+            "path": str(tmp_backup),
+        })
+
+        with db.get_connection() as conn:
+            conn.execute("DELETE FROM history")
+            conn.execute("DELETE FROM tags")
+            conn.execute("DELETE FROM memories")
+
+        result = await handle_memory_restore({
+            "password": "pw",
+            "path": str(tmp_backup),
+            "key_filter": "project.*",
+        })
+        assert result.restored == 2
+        assert set(result.keys_stored) == {"project.alpha", "project.beta"}

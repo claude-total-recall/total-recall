@@ -208,6 +208,7 @@ class RestoreResponse(BaseModel):
     restored: int = 0
     skipped: int = 0
     conflicts: int = 0
+    keys_stored: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 

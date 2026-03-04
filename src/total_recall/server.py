@@ -931,6 +931,7 @@ async def handle_memory_restore(args: dict) -> RestoreResponse | ErrorResponse:
         restored=result.restored,
         skipped=result.skipped,
         conflicts=result.conflicts,
+        keys_stored=result.keys_stored,
         warnings=result.warnings,
     )
 
